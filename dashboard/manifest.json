@@ -1,0 +1,8 @@
+{
+  "name": "hermes-pickup",
+  "label": "Pick up",
+  "description": "Pick up where you left off: up to 3 threads of unfinished work from your chats, projects and files",
+  "icon": "Clock",
+  "version": "0.1.1",
+  "api": "plugin_api.py"
+}
