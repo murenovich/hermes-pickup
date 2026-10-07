@@ -5,7 +5,7 @@ title, what you were doing, where it stopped, and a suggested next step. Built f
 Hermes chats, project folders and files.
 
 MIT licensed. The evidence builder, transcript reader, cited-id parser and prompt are adapted from
-[Herald OS](https://github.com/iamlukethedev/Herald-OS) by Luke (iamlukethedev)[https://github.com/iamlukethedev], MIT. See `LICENSE`
+[Herald OS](https://github.com/iamlukethedev/Herald-OS) by Luke [iamlukethedev](https://github.com/iamlukethedev), MIT. See `LICENSE`
 and `reference/`.
 
 ![Pick up in Hermes Desktop: two cards, each with where you stopped and a next-step button](docs/screenshot.png)
