@@ -145,8 +145,10 @@ class SettingsUpdate(BaseModel):
     chat_window_days: float | None = Field(None, gt=0, le=365, allow_inf_nan=False)
     max_files: int | None = Field(None, ge=0, le=50)
     max_projects: int | None = Field(None, ge=1, le=20)
-    max_chats: int | None = Field(None, ge=1, le=20)
-    chats_read: int | None = Field(None, ge=1, le=100)
+    max_chats: int | None = Field(None, ge=1, le=40)
+    chats_read: int | None = Field(None, ge=1, le=100)  # legacy: accepted, no longer limits the scan
+    max_cards: int | None = Field(None, ge=1, le=10)
+    chats_per_profile: int | None = Field(None, ge=1, le=10)
     project_roots: list[_Text] | None = None
     exclude_profiles: list[_Text] | None = None
     exclude: list[_Text] | None = None
@@ -177,18 +179,22 @@ class ConsentRequest(BaseModel):
     accepted: bool
 
 
-def _available_profiles() -> list[str]:
-    """Every profile with a session store in this install (names only, nothing is read)."""
+def _profiles(skipped: list[str] = ()) -> list[dict]:
+    """The one profile inventory (names and whether a store exists; nothing is opened). Used for the
+    valid skip names, GET /profiles and available_profiles."""
     try:
-        return [name for name, _ in core.session_stores(core.Settings())]
+        return core.profile_inventory(core.Settings(exclude_profiles=list(skipped)))
     except Exception:
         return []
+
+
+def _available_profiles() -> list[str]:
+    return [p["name"] for p in _profiles()]
 
 
 def _default_settings() -> dict[str, Any]:
     d = dict(vars(core.Settings()))
     d["exclude"] = list(DEFAULT_EXCLUDE)
-    d["exclude_profiles"] = []
     return d
 
 
@@ -201,8 +207,11 @@ def _load_stored(state: Path) -> tuple[dict, dict, bool]:
         return {}, {}, False
     data = data or {}
     consent = data.get("consent") if isinstance(data.get("consent"), dict) else {}
+    saved = data.get("settings", {})
+    if isinstance(saved, dict):  # keys this version does not know (older or newer file) are ignored, not fatal
+        saved = {k: v for k, v in saved.items() if k in SettingsUpdate.model_fields}
     try:
-        stored = SettingsUpdate.model_validate(data.get("settings", {})).model_dump(exclude_unset=True)
+        stored = SettingsUpdate.model_validate(saved).model_dump(exclude_unset=True)
     except Exception:
         return {}, {}, False
     return consent, stored, True
@@ -362,6 +371,12 @@ def get_settings():
     return _settings_payload(_load_stored(_state_dir())[1])
 
 
+@router.get("/profiles")
+def get_profiles():
+    skipped = _effective_settings(_load_stored(_state_dir())[1])["exclude_profiles"]
+    return {"profiles": _profiles(skipped)}
+
+
 @router.put("/settings")
 def put_settings(body: dict = Body(...)):
     # Validated by hand: FastAPI cannot serialise its own 422 when the rejected input is NaN/Infinity.
@@ -370,6 +385,12 @@ def put_settings(body: dict = Body(...)):
     except ValidationError as e:
         raise HTTPException(422, [{"field": ".".join(map(str, err["loc"])), "message": err["msg"]}
                                   for err in e.errors(include_input=False, include_url=False, include_context=False)])
+    # Names are checked on save only: a skip saved for a profile that was later removed stays saved (and
+    # applies again if the profile comes back), it is never rejected on load or dropped.
+    unknown = [n for n in update.get("exclude_profiles", []) if n not in _available_profiles()]
+    if unknown:
+        raise HTTPException(422, [{"field": "exclude_profiles",
+                                   "message": "Unknown profile: " + ", ".join(repr(n) for n in unknown)}])
     state = _state_dir()
     with _lock:
         # If the file was unreadable or invalid, consent comes back empty: saving settings never revives it.

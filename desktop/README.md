@@ -1,7 +1,7 @@
 # desktop/
 
 `plugin.js` is the Hermes Desktop half of Pick up: one plain ESM file, no JSX, no build step. It imports only
-`@hermes/plugin-sdk`, `react` and `react/jsx-runtime`, styles with theme variables only, and talks to the
+`@hermes/plugin-sdk` and `react`, styles with theme variables only, and talks to the
 backend through `ctx.rest` (`/api/plugins/hermes-pickup/...`, see the root README "API").
 `install.sh` copies it to `$HERMES_HOME/desktop-plugins/hermes-pickup/plugin.js`; the folder name equals the
 plugin id. The backend needs `hermes-pickup` in `plugins.enabled` plus one Desktop restart; until then the
@@ -20,11 +20,22 @@ page shows "Couldn't reach Pick up" with that hint.
   Document and file contents are never read; no user files are changed. Settings and the last cards are saved
   in the profile's Pick up folder. Settings and exclusions can be reviewed before consenting. Only an explicit
   **Turn on** sends `POST /consent`, then the first scan runs; no `/cards` or `/refresh` request precedes consent.
-- Up to 3 cards (two columns when wide, one when narrow): ranking eyebrow, title, "You were…", "Stopped:",
-  chips, **Continue** and the suggested next step. Header shows "Updated HH:MM", Refresh (spinner, 3-minute
-  timeout, previous cards kept on error) and a settings drawer (`PUT /settings`: exclusions and include
-  files only; only changed fields are sent, `exclude_profiles` is never sent). Chats come from all profiles.
-  The drawer button is disabled until `GET /status` has loaded, so unknown settings are never overwritten.
+- 1–10 cards (the first "Most worth resuming", the rest "Also open"; two columns when wide, one when
+  narrow): title, "You were…", "Stopped:", chips, **Continue** and the suggested next step. Header shows
+  "Updated HH:MM" and Refresh (spinner, 3-minute timeout, previous cards kept on error).
+- **Cards | Settings** switch under the header (replaces the old drawer; offered only once `GET /status` has
+  loaded, so unknown settings are never overwritten). Sections: Cards (1–10, default 5), Reading (chats per
+  profile 1–10, chats in total 1–40, look-back days for chats/projects/files, >0 and ≤365, fractions ok),
+  Profiles (one tick per profile from `GET /profiles`, all included; unticked = skipped, never read),
+  Privacy (exclude list, include files) and Project folders (`project_roots`, empty = auto-detect).
+  **Save** sends only changed known fields (`PUT /settings`), so fields the page does not show stay as the
+  backend holds them; **Discard** returns to the saved values. Edits are compared with a snapshot taken when
+  the form was opened, so status polling never overwrites a draft. A refused save (`422 {detail:[{field,message}]}`,
+  also when wrapped in the SDK error's message) shows the message next to its field and keeps the draft.
+  Saving does not refresh; new settings apply to the next refresh. If the profile list cannot be loaded the
+  saved skips stay untouched. A saved skip for a profile that no longer exists stays listed ("not found") and
+  must be ticked to clear before other skip changes can be saved, because the backend rejects unknown names.
+- No `react/jsx-runtime`: `plugin.js` defines `jsx`/`jsxs` on `createElement` (allowed imports: `@hermes/plugin-sdk`, `react`).
 - Chips: chat chips show "Telegram chat · alpha" (source + profile) with the chat's own title below in small
   muted text, one line, full title on hover; project/file chips show "Project · name" only.
 
@@ -53,7 +64,7 @@ page shows "Couldn't reach Pick up" with that hint.
 node --check desktop/plugin.js
 node desktop/test/check-imports.mjs            # import allow-list, jsx identifiers, no JSX/colour literals
 node desktop/test/pickup.test.mjs --modules=<node_modules with react, react-dom, esbuild, playwright> \
-     [--chrome=<chromium executable>]          # 2 tests, fixture (stub SDK), headless Chromium
+     [--chrome=<chromium executable>]          # 6 tests, fixture (stub SDK), headless Chromium
 node desktop/test/build.mjs --modules=<…>      # just build desktop/test/.build/harness.html to look at
 ```
 

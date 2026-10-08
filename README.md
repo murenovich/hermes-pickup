@@ -1,14 +1,21 @@
 # Hermes Pickup
 
-"Pick up where you left off" for Hermes Desktop: up to 3 cards of unfinished work, each with a
-title, what you were doing, where it stopped, and a suggested next step. Built from your recent
+"Pick up where you left off" for Hermes Desktop: 1 to 10 cards of unfinished work (5 by default), each
+with a title, what you were doing, where it stopped, and a suggested next step. Built from your recent
 Hermes chats, project folders and files.
+
+The page has a **Cards | Settings** switch. Settings holds the number of cards, how many chats are read
+per profile and in total, the look-back days for chats, projects and files, a tick-list of profiles
+(all included; untick one and it is never read), the exclude list and files toggle, and your project
+folders (empty = auto-detect). Save sends only what you changed, shows a refused value next to its field,
+and does not refresh; changes apply to the next refresh and your current cards stay until it succeeds.
+More cards and more chats mean a bigger request to your model (more tokens, a few more seconds).
 
 MIT licensed. The evidence builder, transcript reader, cited-id parser and prompt are adapted from
 [Herald OS](https://github.com/iamlukethedev/Herald-OS) by Luke [iamlukethedev](https://github.com/iamlukethedev), MIT. See `LICENSE`
 and `reference/`.
 
-![Pick up in Hermes Desktop: two cards, each with where you stopped and a next-step button](docs/screenshot.png)
+![Pick up in Hermes Desktop: cards, each with where you stopped and a next-step button](docs/screenshot.png)
 
 ## Install / uninstall
 
@@ -76,8 +83,9 @@ Hermes), since it would then install for that profile only.
 
 Until you change them, folders, chat titles and your own messages containing any of
 `health`, `medical`, `finance`, `nutrition`, `inbox` are left out. All profiles are included by default,
-regardless of their names; v1 has no skipped-profiles control. The backend `exclude_profiles` field
-defaults to `[]`, and explicitly saved values are preserved, including during partial settings updates.
+regardless of their names, until you untick one under Settings → Profiles; a skipped profile is never
+opened. The backend `exclude_profiles` field defaults to `[]`, and saved values are preserved, including
+during partial settings updates.
 Setting `exclude` or `exclude_profiles` replaces that field; `[]` means no exclusions. These are keyword
 filters, not a sensitive-data classifier: review the folder/word list before turning on Pickup. Including
 all profiles does not bypass that list or the consent gate. The package cannot infer which
@@ -109,8 +117,8 @@ Base: `/api/plugins/hermes-pickup`. Errors are `{"detail": "..."}` (422 validati
 
 `counts`: `{chats, projects, files, profiles: [names used], source_errors}`. `state_error` is true when
 `settings.json` was unreadable (consent is then treated as not given).
-`available_profiles`: every profile with a session store in this install; retained as API metadata,
-not a skipped-profiles picker in v1.
+`available_profiles`: every profile in this install, including those without a session store. The Settings page builds its
+profile tick-list from `GET /profiles` (`{profiles: [{name, excluded, has_session_store}]}`) instead.
 
 ### Settings
 
@@ -118,12 +126,15 @@ not a skipped-profiles picker in v1.
 |---|---|---|
 | `file_window_days`, `project_window_days`, `chat_window_days` | number, 0 < n ≤ 365 | 3, 7, 3 |
 | `max_files` | int 0–50 | 16 |
-| `max_projects` / `max_chats` | int 1–20 | 8 / 8 |
+| `max_projects` | int 1–20 | 8 |
+| `max_chats` | int 1–40 | 20 |
+| `max_cards` | int 1–10 | 5 |
+| `chats_per_profile` | int 1–10 | 3 |
 | `chats_read` | int 1–100 | 24 |
 | `include_files` | bool | true |
 | `project_roots` | ≤100 absolute or `~/` paths; empty = auto-detect | `[]` |
 | `exclude` | ≤100 folders (`/…`, `~/…`) or words | see above |
-| `exclude_profiles` | ≤100 profile names (backend only in v1) | `[]` (all profiles) |
+| `exclude_profiles` | ≤100 profile names (Settings → Profiles) | `[]` (all profiles) |
 | `skip_sessions` | ≤100 session ids | `[]` |
 | `agent_identities` | ≤100 extra commit-author strings treated as bots | `[]` |
 

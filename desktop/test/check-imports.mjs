@@ -1,13 +1,23 @@
-// Static gate: only the three allowed import specifiers, and every component identifier passed to
-// jsx()/jsxs() is imported or declared locally. Usage: node desktop/test/check-imports.mjs [plugin.js]
+// Static gate: only the two allowed import sources (@hermes/plugin-sdk and react; react/jsx-runtime is
+// NOT allowed, plugin.js defines its own jsx/jsxs on createElement), and every component identifier passed
+// to jsx()/jsxs() is imported or declared locally. Usage: node desktop/test/check-imports.mjs [plugin.js]
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const file = process.argv[2] || join(dirname(fileURLToPath(import.meta.url)), '..', 'plugin.js')
 const src = readFileSync(file, 'utf8')
-const ALLOWED = new Set(['@hermes/plugin-sdk', 'react', 'react/jsx-runtime'])
+const ALLOWED = new Set(['@hermes/plugin-sdk', 'react'])
 const problems = []
+
+// Forms the main import regex below does not see: side-effect imports and re-exports from a module.
+for (const m of src.matchAll(/^\s*import\s*['"]([^'"]+)['"]/gm)) {
+  problems.push(`side-effect import: ${m[1]}`)
+}
+
+for (const m of src.matchAll(/^\s*export\s[^;]*?\sfrom\s*['"]([^'"]+)['"]/gm)) {
+  problems.push(`re-export from: ${m[1]}`)
+}
 
 const imported = new Set()
 
@@ -76,4 +86,4 @@ if (problems.length) {
   process.exit(1)
 }
 
-console.log('PASS: three allowed specifiers, all jsx identifiers resolved, no JSX syntax, no colour literals')
+console.log('PASS: two allowed import sources, all jsx identifiers resolved, no JSX syntax, no colour literals')

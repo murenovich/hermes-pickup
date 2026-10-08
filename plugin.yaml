@@ -1,6 +1,6 @@
 name: hermes-pickup
-version: 0.1.1
-description: Pick up where you left off — up to 3 cards of unfinished work from your chats, projects and files.
+version: 0.2.0
+description: Pick up where you left off — up to 10 cards of unfinished work from your chats, projects and files.
 manifest_version: 1
 requires_hermes: ">=0.20.0"
 author: Matt Urenovich (murenovich), adapted from Herald OS by Luke (iamlukethedev)

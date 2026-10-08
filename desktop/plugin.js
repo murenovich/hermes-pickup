@@ -1,15 +1,9 @@
 // Hermes Pickup — desktop half. Plain ESM, no JSX, no build step.
-// Imports are limited to the three specifiers a disk plugin may use.
+// Imports are limited to the two specifiers a disk plugin may use: @hermes/plugin-sdk and react.
 // Backend: /api/plugins/hermes-pickup/* (see README.md "API"). Theme variables only.
 import {
   Button,
   Codicon,
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
   EmptyState,
   ErrorState,
   PALETTE_AREA,
@@ -23,12 +17,33 @@ import {
   useQueryClient,
   useValue
 } from '@hermes/plugin-sdk'
-import { useEffect, useRef, useState } from 'react'
-import { jsx, jsxs } from 'react/jsx-runtime'
+import { createElement, useEffect, useRef, useState } from 'react'
+
+// A disk plugin may not import react/jsx-runtime, so these two mirror its contract on createElement:
+// the key is the third argument; jsx passes children as one argument (React key-checks an array there), jsxs
+// spreads a static children array into arguments (no key check, like the real runtime). One difference:
+// a one-element static array reaches the component as that element, not as an array.
+function build(type, props, key, staticChildren) {
+  const { children, ...rest } = props || {}
+
+  if (key !== undefined) {
+    rest.key = key
+  }
+
+  if (children === undefined) {
+    return createElement(type, rest)
+  }
+
+  return staticChildren && Array.isArray(children) ? createElement(type, rest, ...children) : createElement(type, rest, children)
+}
+
+const jsx = (type, props, key) => build(type, props, key, false)
+const jsxs = (type, props, key) => build(type, props, key, true)
 
 const PLUGIN_ID = 'hermes-pickup'
 const ROUTE = '/pickup'
-const MAX_CARDS = 3
+// The most cards the backend can be set to; the page never shows more than this.
+const MAX_CARDS = 10
 // Refresh makes a model call (~20 s typical). The REST door defaults to 30 s.
 const REFRESH_TIMEOUT_MS = 180000
 // Bounded waits for a freshly opened/created composer to mount. Not data polling:
@@ -394,7 +409,9 @@ const S = {
   h1: { margin: 0, fontSize: '1.375rem', fontWeight: 600, color: 'var(--ui-text-primary)' },
   sub: { margin: '0.25rem 0 0', fontSize: '0.8125rem', color: 'var(--ui-text-tertiary)' },
   tools: { display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.75rem', color: 'var(--ui-text-tertiary)' },
-  grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 24rem), 1fr))', gap: '1rem' },
+  // auto-fill keeps one card at column width instead of stretching it across the page; min(100%, …) gives
+  // a single full-width column on narrow windows.
+  grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 24rem), 1fr))', gap: '1rem' },
   card: {
     display: 'flex',
     flexDirection: 'column',
@@ -449,18 +466,27 @@ const S = {
   label: { fontSize: '0.8125rem', fontWeight: 500, color: 'var(--ui-text-primary)' },
   hint: { margin: 0, fontSize: '0.75rem', lineHeight: 1.45, color: 'var(--ui-text-tertiary)' },
   row: { display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.8125rem' },
-  drawer: {
-    left: 'auto',
-    right: 0,
-    top: 0,
-    transform: 'none',
-    translate: 'none', // Tailwind v4's dialog centering uses the independent translate property.
-    height: '100%',
-    maxHeight: '100vh',
-    width: 'min(26rem, 100vw)',
-    maxWidth: '100vw',
-    borderRadius: 0
-  }
+  tabs: { display: 'flex', gap: '0.375rem' },
+  settings: { display: 'flex', flexDirection: 'column', gap: '1rem', maxWidth: '40rem', minWidth: 0 },
+  numbers: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 12rem), 1fr))', gap: '0.875rem' },
+  input: {
+    boxSizing: 'border-box',
+    width: '100%',
+    padding: '0.375rem 0.5rem',
+    font: 'inherit',
+    color: 'var(--ui-text-primary)',
+    background: 'transparent',
+    // Longhands, so the invalid state can swap only the colour without React's shorthand-conflict warning.
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: 'var(--ui-stroke-secondary)',
+    borderRadius: '0.375rem'
+  },
+  inputBad: { borderColor: 'var(--ui-accent)' },
+  fieldError: { margin: 0, fontSize: '0.75rem', lineHeight: 1.45, color: 'var(--ui-accent)', overflowWrap: 'anywhere' },
+  check: { display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.8125rem', overflowWrap: 'anywhere' },
+  checks: { display: 'flex', flexDirection: 'column', gap: '0.375rem' },
+  checkbox: { accentColor: 'var(--ui-accent)', margin: 0 }
 }
 
 function Notice({ tone, children, onDismiss }) {
@@ -631,7 +657,12 @@ function ConsentPanel({ profile, stateError, busy, error, onAccept, onReview }) 
             children: `It does save its own settings and the last cards in a small Pick up folder in this Hermes's data, separately for the profile you're in now ("${profile}"). There's no in-app undo for this OK yet.`
           }),
           jsx('li', {
-            children: 'It reads recent chats across all your profiles, except chats and folders matching your exclusions. You can review them before turning it on.'
+            children:
+              'It reads recent chats across all your profiles, except profiles you skip in Settings and chats and folders matching your exclusions. Skipped profiles are not read at all. You can review all of this before turning it on.'
+          }),
+          jsx('li', {
+            children:
+              'More cards and more chats make a bigger request to your model: more tokens and a few more seconds for each refresh.'
           })
         ]
       }),
@@ -647,77 +678,324 @@ function ConsentPanel({ profile, stateError, busy, error, onAccept, onReview }) 
   })
 }
 
+// ---- settings page ---------------------------------------------------------------------------
+
 const toList = text =>
   Array.from(new Set(text.split('\n').map(line => line.trim()).filter(Boolean)))
 
 const sameList = (a, b) => a.length === b.length && a.every((value, index) => value === b[index])
 
-// The form lives inside the dialog content, which only exists while the drawer is open. Its state is
-// therefore seeded from the saved settings on every open, and a cancelled edit can never linger.
-function DrawerForm({ onOpenChange, profile, status }) {
+// Same limits as the backend (it stays the authority; its own messages are shown on the field too).
+// `whole` fields are integers in [min, max]; the others are day windows: more than 0 and at most 365, fractions allowed.
+const NUMBER_FIELDS = {
+  max_cards: { whole: true, min: 1, max: 10, fallback: 5 },
+  chats_per_profile: { whole: true, min: 1, max: 10, fallback: 3 },
+  max_chats: { whole: true, min: 1, max: 40, fallback: 20 },
+  chat_window_days: { fallback: 3 },
+  project_window_days: { fallback: 7 },
+  file_window_days: { fallback: 3 }
+}
+
+const LIST_FIELDS = ['exclude', 'project_roots']
+const FORM_FIELDS = new Set([...Object.keys(NUMBER_FIELDS), ...LIST_FIELDS, 'include_files', 'exclude_profiles'])
+
+function parseNumber(name, text) {
+  const spec = NUMBER_FIELDS[name]
+  const raw = String(text).trim()
+  const value = raw ? Number(raw) : NaN
+
+  if (!Number.isFinite(value)) {
+    return { error: 'Enter a number.' }
+  }
+
+  if (spec.whole) {
+    return Number.isInteger(value) && value >= spec.min && value <= spec.max
+      ? { value }
+      : { error: `Use a whole number from ${spec.min} to ${spec.max}.` }
+  }
+
+  return value > 0 && value <= 365 ? { value } : { error: 'Use more than 0 and at most 365 days.' }
+}
+
+// The form's working copy: every field as editable text/boolean, in the backend's own field names.
+function toDraft(settings) {
+  const saved = settings || {}
+
+  const draft = {
+    include_files: saved.include_files !== false,
+    exclude_profiles: Array.isArray(saved.exclude_profiles) ? saved.exclude_profiles.slice() : []
+  }
+
+  for (const [name, spec] of Object.entries(NUMBER_FIELDS)) {
+    draft[name] = String(typeof saved[name] === 'number' ? saved[name] : spec.fallback)
+  }
+
+  for (const name of LIST_FIELDS) {
+    draft[name] = (Array.isArray(saved[name]) ? saved[name] : []).join('\n')
+  }
+
+  return draft
+}
+
+// What a save would send: only known fields whose value differs from the snapshot, never anything else
+// (hidden fields such as skip_sessions stay as the backend holds them). `errors` are fields that cannot be sent.
+function diffDraft(draft, base) {
+  const body = {}
+  const errors = {}
+
+  for (const name of Object.keys(NUMBER_FIELDS)) {
+    if (draft[name] === base[name]) {
+      continue
+    }
+
+    const now = parseNumber(name, draft[name])
+
+    if (now.error) {
+      errors[name] = now.error
+    } else if (now.value !== parseNumber(name, base[name]).value) {
+      body[name] = now.value
+    }
+  }
+
+  for (const name of LIST_FIELDS) {
+    const list = toList(draft[name])
+
+    if (sameList(list, toList(base[name]))) {
+      continue
+    }
+
+    if (list.length > MAX_LIST) {
+      errors[name] = `At most ${MAX_LIST} entries.`
+    } else if (list.some(entry => entry.length > MAX_ENTRY_CHARS)) {
+      errors[name] = `Each entry must be ${MAX_ENTRY_CHARS} characters or fewer.`
+    } else {
+      body[name] = list
+    }
+  }
+
+  if (draft.include_files !== base.include_files) {
+    body.include_files = draft.include_files
+  }
+
+  const skipped = draft.exclude_profiles
+
+  if (skipped.length !== base.exclude_profiles.length || skipped.some(name => !base.exclude_profiles.includes(name))) {
+    body.exclude_profiles = skipped
+  }
+
+  return { body, errors }
+}
+
+// A rejected save arrives as {detail:[{field,message}]}, either on err.detail or as JSON inside err.message.
+function parseSaveError(err) {
+  let detail = err && err.detail
+
+  if (!Array.isArray(detail)) {
+    const text = (err && typeof err.message === 'string' && err.message) || (typeof detail === 'string' ? detail : '')
+    const brace = text.indexOf('{')
+
+    detail = null
+
+    if (brace >= 0) {
+      try {
+        detail = JSON.parse(text.slice(brace)).detail
+      } catch {
+        detail = null
+      }
+    }
+  }
+
+  const fields = {}
+  const other = []
+
+  for (const item of Array.isArray(detail) ? detail : []) {
+    const message = String((item && item.message) || item).replace(/^Value error, /, '')
+    const [head, ...rest] = String((item && item.field) || '').split('.')
+
+    if (FORM_FIELDS.has(head)) {
+      const entry = /^\d+$/.test(rest[0] || '') ? `Entry ${Number(rest[0]) + 1}: ` : ''
+
+      fields[head] = fields[head] ? `${fields[head]} ${entry}${message}` : `${entry}${message}`
+    } else {
+      other.push(head ? `${head}: ${message}` : message)
+    }
+  }
+
+  if (!Object.keys(fields).length && !other.length) {
+    other.push(errorText(err))
+  }
+
+  return { fields, general: other.join('; ') }
+}
+
+function FieldMessage({ id, error }) {
+  return error ? jsx('p', { id, role: 'alert', style: S.fieldError, children: error }) : null
+}
+
+function NumberField({ name, label, hint, value, error, disabled, onChange }) {
+  const id = `pickup-${name}`
+  const spec = NUMBER_FIELDS[name]
+
+  return jsxs('div', {
+    style: S.field,
+    children: [
+      jsx('label', { htmlFor: id, style: S.label, children: label }),
+      jsx('input', {
+        id,
+        type: 'number',
+        inputMode: spec.whole ? 'numeric' : 'decimal',
+        step: spec.whole ? 1 : 'any',
+        value,
+        disabled,
+        'aria-invalid': error ? 'true' : undefined,
+        'aria-describedby': error ? `${id}-error ${id}-hint` : `${id}-hint`,
+        style: error ? { ...S.input, ...S.inputBad } : S.input,
+        onChange: event => onChange(event.target.value)
+      }),
+      jsx(FieldMessage, { id: `${id}-error`, error }),
+      jsx('p', { id: `${id}-hint`, style: S.hint, children: hint })
+    ]
+  })
+}
+
+function ListField({ name, label, hint, placeholder, value, error, disabled, onChange }) {
+  const id = `pickup-${name}`
+
+  return jsxs('div', {
+    style: S.field,
+    children: [
+      jsx('label', { htmlFor: id, style: S.label, children: label }),
+      jsx(Textarea, {
+        id,
+        rows: 5,
+        value,
+        disabled,
+        placeholder,
+        'aria-invalid': error ? 'true' : undefined,
+        'aria-describedby': error ? `${id}-error ${id}-hint` : `${id}-hint`,
+        onChange: event => onChange(event.target.value)
+      }),
+      jsx(FieldMessage, { id: `${id}-error`, error }),
+      jsx('p', { id: `${id}-hint`, style: S.hint, children: hint })
+    ]
+  })
+}
+
+function ProfileCheck({ name, note, checked, disabled, onChange }) {
+  return jsxs('label', {
+    style: S.check,
+    children: [
+      jsx('input', { type: 'checkbox', style: S.checkbox, checked, disabled, onChange: event => onChange(event.target.checked) }),
+      jsxs('span', {
+        children: [name, note ? jsx('span', { style: { color: 'var(--ui-text-tertiary)' }, children: ` · ${note}` }) : null]
+      })
+    ]
+  })
+}
+
+function SettingsSection({ id, title, children }) {
+  return jsxs('section', {
+    style: S.panel,
+    'aria-labelledby': id,
+    children: [jsx('h2', { id, style: { ...S.title, fontSize: '1rem' }, children: title }), ...[].concat(children)]
+  })
+}
+
+// Stays mounted (hidden) after it was first opened, so switching to Cards and back keeps a draft.
+// `settings` is read once, when the page is first opened: it is the snapshot every edit is compared with, so
+// the status polling that runs during a refresh can never overwrite what is being typed.
+function SettingsView({ profile, settings, hidden }) {
   const queryClient = useQueryClient()
   const alive = useAlive()
-  const settings = (status && status.settings) || {}
-  const [excludeText, setExcludeText] = useState(() => (Array.isArray(settings.exclude) ? settings.exclude : []).join('\n'))
-  const [includeFiles, setIncludeFiles] = useState(() => settings.include_files !== false)
+  const [base, setBase] = useState(() => toDraft(settings))
+  const [draft, setDraft] = useState(() => base)
   const [saving, setSaving] = useState(false)
-  const [error, setError] = useState(null)
+  const [serverErrors, setServerErrors] = useState({})
+  const [general, setGeneral] = useState(null)
+  const [saved, setSaved] = useState(false)
 
-  const excludeList = toList(excludeText)
-  const savedExclude = Array.isArray(settings.exclude) ? settings.exclude : []
+  const profiles = useQuery({
+    queryKey: key(profile, 'profiles'),
+    queryFn: () => fetchScoped(profile, '/profiles'),
+    retry: false,
+    refetchOnWindowFocus: false
+  })
 
-  // exclude_profiles is never sent: whatever the backend holds stays untouched.
-  const body = {}
+  const inventory = Array.isArray(profiles.data && profiles.data.profiles)
+    ? profiles.data.profiles.filter(entry => entry && typeof entry.name === 'string')
+    : null
 
-  if (!sameList(excludeList, savedExclude)) {
-    body.exclude = excludeList
+  const { body, errors: clientErrors } = diffDraft(draft, base)
+  const dirty = Object.keys(body).length > 0 || Object.keys(clientErrors).length > 0
+  const blocked = Object.keys(clientErrors).length > 0
+  const shown = { ...serverErrors, ...clientErrors }
+
+  const edit = (name, change) => {
+    setDraft(old => ({ ...old, [name]: isFn(change) ? change(old[name]) : change }))
+    setServerErrors(old => {
+      if (!(name in old)) {
+        return old
+      }
+
+      const { [name]: dropped, ...rest } = old
+
+      return rest
+    })
+    setGeneral(null)
+    setSaved(false)
   }
 
-  if (includeFiles !== (settings.include_files !== false)) {
-    body.include_files = includeFiles
+  const discard = () => {
+    setDraft(base)
+    setServerErrors({})
+    setGeneral(null)
+    setSaved(false)
   }
-
-  const tooMany = excludeList.length > MAX_LIST
-  const tooLong = excludeList.some(entry => entry.length > MAX_ENTRY_CHARS)
-  const invalid = tooMany ? `At most ${MAX_LIST} exclusions.` : tooLong ? `Each exclusion must be ${MAX_ENTRY_CHARS} characters or fewer.` : null
 
   const save = async () => {
-    if (!Object.keys(body).length) {
-      onOpenChange(false)
-
+    if (!dirty || blocked || saving) {
       return
     }
 
     if (currentProfile() !== profile) {
-      setError('The profile changed. Close this panel and reopen it.')
+      setGeneral('The profile changed. Reopen Pick up and try again.')
 
       return
     }
 
     setSaving(true)
-    setError(null)
+    setServerErrors({})
+    setGeneral(null)
+    setSaved(false)
 
     try {
-      const saved = await ctx.rest('/settings', { method: 'PUT', body })
+      const result = await ctx.rest('/settings', { method: 'PUT', body })
 
       // Only this profile's status entry is touched; cached cards stay until the next refresh succeeds.
       queryClient.setQueryData(key(profile, 'status'), old =>
-        old
-          ? {
-              ...old,
-              settings: saved.settings || old.settings
-            }
-          : old
+        old ? { ...old, settings: (result && result.settings) || { ...old.settings, ...body } } : old
       )
 
       if (alive.current) {
-        onOpenChange(false)
+        const next = result && result.settings ? toDraft(result.settings) : draft
+
+        setBase(next)
+        setDraft(next)
+        setSaved(true)
       }
 
       toast('success', 'Pick up settings saved. They apply to the next refresh.')
     } catch (err) {
       if (alive.current) {
-        setError(errorText(err))
+        // The draft is kept exactly as typed; the message goes next to the field the backend named.
+        const parsed = parseSaveError(err)
+
+        setServerErrors(parsed.fields)
+        setGeneral(
+          Object.keys(parsed.fields).length
+            ? ['Not saved. Check the highlighted fields.', parsed.general].filter(Boolean).join(' ')
+            : `Not saved: ${parsed.general}`
+        )
       }
     } finally {
       if (alive.current) {
@@ -726,63 +1004,168 @@ function DrawerForm({ onOpenChange, profile, status }) {
     }
   }
 
-  return jsxs(DialogContent, {
-      style: S.drawer,
-      children: [
-        jsxs(DialogHeader, {
-          children: [
-            jsx(DialogTitle, { children: 'Pick up settings' }),
-            jsx(DialogDescription, {
-              children: `For profile "${profile}". Changes apply to the next refresh; cards you already have stay until it succeeds.`
-            })
-          ]
-        }),
-        jsxs('div', {
-          style: S.field,
-          children: [
-            jsx('label', { htmlFor: 'pickup-exclude', style: S.label, children: 'Leave out' }),
-            jsx(Textarea, {
-              id: 'pickup-exclude',
-              rows: 6,
-              value: excludeText,
-              onChange: event => setExcludeText(event.target.value),
-              'aria-describedby': 'pickup-exclude-hint',
-              placeholder: 'One per line: a folder path or a word'
-            }),
-            jsx('p', {
-              id: 'pickup-exclude-hint',
-              style: S.hint,
-              children: excludeList.length
-                ? 'Folders (starting with / or ~/), chat titles and your own messages containing any of these are left out. This replaces the built-in list.'
-                : 'Empty means nothing is left out: everything recent can be sent to your model provider.'
-            })
-          ]
-        }),
-        jsxs('div', {
-          style: S.row,
-          children: [
-            jsx(Switch, { id: 'pickup-files', checked: includeFiles, onCheckedChange: value => setIncludeFiles(value === true) }),
-            jsx('label', { htmlFor: 'pickup-files', children: 'Include recently changed files (names only)' })
-          ]
-        }),
-        invalid ? jsx(Notice, { tone: 'error', children: invalid }) : null,
-        error ? jsx(Notice, { tone: 'error', children: error }) : null,
-        jsxs(DialogFooter, {
-          children: [
-            jsx(Button, { variant: 'outline', disabled: saving, onClick: () => onOpenChange(false), children: 'Cancel' }),
-            jsx(Button, { loading: saving, disabled: Boolean(invalid), onClick: save, children: 'Save' })
-          ]
-        })
-      ]
-  })
-}
+  const skipped = draft.exclude_profiles
+  const known = inventory ? inventory.map(entry => entry.name) : []
+  // Skips for profiles that no longer exist stay in the list (so saving never drops them silently); the user can clear them.
+  const missing = inventory ? skipped.filter(name => !known.includes(name)) : []
 
-function SettingsDrawer({ open, onOpenChange, profile, status }) {
-  return jsx(Dialog, {
-    open,
-    onOpenChange,
-    // Mounted only while open so each open starts from the saved settings.
-    children: open ? jsx(DrawerForm, { onOpenChange, profile, status }) : null
+  const setIncluded = (name, included) =>
+    edit('exclude_profiles', list => (included ? list.filter(entry => entry !== name) : list.includes(name) ? list : [...list, name]))
+
+  let profileRows
+
+  if (inventory) {
+    profileRows = jsxs('div', {
+      style: S.checks,
+      children: [
+        ...inventory.map(entry =>
+          jsx(
+            ProfileCheck,
+            {
+              name: entry.name,
+              note: entry.has_session_store ? null : 'no chats stored yet',
+              checked: !skipped.includes(entry.name),
+              disabled: saving,
+              onChange: included => setIncluded(entry.name, included)
+            },
+            entry.name
+          )
+        ),
+        ...missing.map(name =>
+          jsx(
+            ProfileCheck,
+            {
+              name,
+              note: 'not found on this Hermes now',
+              checked: false,
+              disabled: saving,
+              onChange: included => setIncluded(name, included)
+            },
+            `missing:${name}`
+          )
+        )
+      ]
+    })
+  } else if (profiles.isError) {
+    profileRows = jsx(Notice, {
+      tone: 'error',
+      children: jsxs('span', {
+        children: [
+          `Couldn't load the profile list (${errorText(profiles.error)}). Your saved skips are unchanged${skipped.length ? `: ${skipped.join(', ')}` : ''}. `,
+          jsx(Button, { size: 'xs', variant: 'outline', onClick: () => profiles.refetch(), children: 'Try again' })
+        ]
+      })
+    })
+  } else {
+    profileRows = jsx('p', { role: 'status', style: S.hint, children: 'Loading profiles…' })
+  }
+
+  const excludeHint = toList(draft.exclude).length
+    ? 'Folders (starting with / or ~/), chat titles and your own messages containing any of these are left out. This replaces the built-in list.'
+    : 'Empty means nothing is left out: everything recent can be sent to your model provider.'
+
+  const field = name => ({ name, value: draft[name], error: shown[name], disabled: saving, onChange: value => edit(name, value) })
+
+  return jsxs('div', {
+    style: { ...S.settings, display: hidden ? 'none' : 'flex' },
+    hidden,
+    children: [
+      jsx('p', {
+        style: S.hint,
+        children: `For profile "${profile}". Changes apply to the next refresh; cards you already have stay until it succeeds.`
+      }),
+      jsxs(SettingsSection, {
+        id: 'pickup-s-cards',
+        title: 'Cards',
+        children: [
+          jsx(NumberField, {
+            ...field('max_cards'),
+            label: 'Number of cards',
+            hint: 'From 1 to 10. Fewer is fine: Pick up does not pad the page with filler.'
+          })
+        ]
+      }),
+      jsxs(SettingsSection, {
+        id: 'pickup-s-reading',
+        title: 'Reading',
+        children: [
+          jsxs('div', {
+            style: S.numbers,
+            children: [
+              jsx(NumberField, { ...field('chats_per_profile'), label: 'Chats per profile', hint: 'From 1 to 10 reserved per profile, subject to the total limit; spare slots are shared.' }),
+              jsx(NumberField, { ...field('max_chats'), label: 'Chats in total', hint: 'From 1 to 40, across all profiles.' }),
+              jsx(NumberField, { ...field('chat_window_days'), label: 'Chats: look back (days)', hint: 'More than 0, up to 365. Fractions are fine.' }),
+              jsx(NumberField, { ...field('project_window_days'), label: 'Projects: look back (days)', hint: 'More than 0, up to 365.' }),
+              jsx(NumberField, { ...field('file_window_days'), label: 'Files: look back (days)', hint: 'More than 0, up to 365.' })
+            ]
+          }),
+          jsx('p', {
+            style: S.hint,
+            children: 'More cards and more chats make a bigger request to your model: more tokens and a few more seconds for each refresh.'
+          })
+        ]
+      }),
+      jsxs(SettingsSection, {
+        id: 'pickup-s-profiles',
+        title: 'Profiles',
+        children: [
+          jsx('p', {
+            style: S.hint,
+            children: 'All profiles are included by default. Untick one to skip it: a skipped profile is never read, not even to look for chats.'
+          }),
+          profileRows,
+          missing.length
+            ? jsx('p', {
+                style: S.hint,
+                children:
+                  'Profiles marked "not found" are still saved as skipped. Hermes only accepts profiles that exist, so changing the skips while one is listed needs it cleared (tick it).'
+              })
+            : null,
+          jsx(FieldMessage, { id: 'pickup-exclude_profiles-error', error: shown.exclude_profiles })
+        ]
+      }),
+      jsxs(SettingsSection, {
+        id: 'pickup-s-privacy',
+        title: 'Privacy',
+        children: [
+          jsx(ListField, { ...field('exclude'), label: 'Leave out', placeholder: 'One per line: a folder path or a word', hint: excludeHint }),
+          jsxs('div', {
+            style: S.row,
+            children: [
+              jsx(Switch, {
+                id: 'pickup-files',
+                checked: draft.include_files,
+                disabled: saving,
+                onCheckedChange: value => edit('include_files', value === true)
+              }),
+              jsx('label', { htmlFor: 'pickup-files', children: 'Include recently changed files (names only)' })
+            ]
+          }),
+          jsx(FieldMessage, { id: 'pickup-include_files-error', error: shown.include_files })
+        ]
+      }),
+      jsxs(SettingsSection, {
+        id: 'pickup-s-roots',
+        title: 'Project folders',
+        children: [
+          jsx(ListField, {
+            ...field('project_roots'),
+            label: 'Folders that hold your projects',
+            placeholder: '/path/to/your/projects',
+            hint: 'One absolute folder (or ~/folder) per line. Empty means Pick up finds your project folders itself.'
+          })
+        ]
+      }),
+      general ? jsx(Notice, { tone: 'error', children: general }) : null,
+      saved ? jsx(Notice, { tone: 'info', children: 'Saved. Changes apply to the next refresh; your current cards stay until it succeeds.' }) : null,
+      jsxs('div', {
+        style: S.actions,
+        children: [
+          jsx(Button, { loading: saving, disabled: !dirty || blocked, onClick: save, children: 'Save' }),
+          jsx(Button, { variant: 'outline', disabled: saving || !dirty, onClick: discard, children: 'Discard' })
+        ]
+      })
+    ]
   })
 }
 
@@ -798,7 +1181,9 @@ function LoadingGrid() {
 function PickupBody({ profile }) {
   const queryClient = useQueryClient()
   const alive = useAlive()
-  const [settingsOpen, setSettingsOpen] = useState(false)
+  // 'cards' | 'settings'. The settings form is created the first time it is opened and then kept (hidden).
+  const [view, setView] = useState('cards')
+  const [settingsSeen, setSettingsSeen] = useState(false)
   const [running, setRunning] = useState(() => refreshing.has(profile))
   const [refreshError, setRefreshError] = useState(null)
   const [consenting, setConsenting] = useState(false)
@@ -902,6 +1287,14 @@ function PickupBody({ profile }) {
     }
   }
 
+  const showView = next => {
+    if (next === 'settings') {
+      setSettingsSeen(true)
+    }
+
+    setView(next)
+  }
+
   const shown = Array.isArray(cards.data && cards.data.cards) ? cards.data.cards.slice(0, MAX_CARDS) : []
   const madeAt = cards.data ? formatUpdated(cards.data.made_at) : null
   const busy = running || refreshingNow
@@ -943,7 +1336,7 @@ function PickupBody({ profile }) {
       busy: consenting,
       error: consentError,
       onAccept: accept,
-      onReview: () => setSettingsOpen(true)
+      onReview: () => showView('settings')
     })
   } else if (cards.isLoading) {
     content = jsx(LoadingGrid, {})
@@ -996,20 +1389,35 @@ function PickupBody({ profile }) {
                         'aria-label': 'Refresh',
                         children: [jsx(Codicon, { name: 'refresh' }), 'Refresh']
                       })
-                    : null,
-                  jsx(Button, {
-                    size: 'icon-sm',
-                    variant: 'ghost',
-                    onClick: () => setSettingsOpen(true),
-                    // Opening before the saved settings are known would seed empty defaults to overwrite.
-                    disabled: !status.data,
-                    'aria-label': 'Pick up settings',
-                    children: jsx(Codicon, { name: 'settings-gear' })
-                  })
+                    : null
                 ]
               })
             ]
           }),
+          // Only offered once the saved settings are known: the form is seeded from them and must never start from guesses.
+          status.data
+            ? jsxs('div', {
+                role: 'group',
+                'aria-label': 'Pick up sections',
+                style: S.tabs,
+                children: [
+                  jsx(Button, {
+                    size: 'sm',
+                    variant: view === 'cards' ? undefined : 'outline',
+                    'aria-pressed': view === 'cards',
+                    onClick: () => showView('cards'),
+                    children: 'Cards'
+                  }),
+                  jsx(Button, {
+                    size: 'sm',
+                    variant: view === 'settings' ? undefined : 'outline',
+                    'aria-pressed': view === 'settings',
+                    onClick: () => showView('settings'),
+                    children: 'Settings'
+                  })
+                ]
+              })
+            : null,
           busy
             ? jsx(Notice, {
                 tone: 'info',
@@ -1026,15 +1434,17 @@ function PickupBody({ profile }) {
           cards.isError && cards.data
             ? jsx(Notice, { tone: 'error', children: `Couldn't update the list: ${errorText(cards.error)}` })
             : null,
-          content
+          view === 'cards' ? content : null,
+          settingsSeen && status.data
+            ? jsx(SettingsView, { profile, settings: status.data.settings, hidden: view !== 'settings' })
+            : null
         ]
-      }),
-      jsx(SettingsDrawer, { open: settingsOpen, onOpenChange: setSettingsOpen, profile, status: status.data })
+      })
     ]
   })
 }
 
-// Remounting per profile drops every piece of local state (open drawer, edits, errors, spinners),
+// Remounting per profile drops every piece of local state (open settings form, edits, errors, spinners),
 // and the query keys carry the profile, so a switch can never show the previous profile's data.
 function PickupPage() {
   const profile = useValue(host.state.profile)

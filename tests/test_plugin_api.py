@@ -135,6 +135,68 @@ def test_settings_validation_and_consent_cannot_bypass_defaults(env):
     assert "Weekend reading list" not in calls[-1]  # partial PUT preserved the saved profile skip
 
 
+def test_v011_files_load_without_losing_consent_or_skips(env):
+    """Defect: after the 0.2.0 update, a 0.1.1 settings file (extra key this version does not know, a skip for a
+    profile that no longer exists) fails validation, so consent is silently revoked or the saved skip is lost
+    and the returning profile is read again; or the 3-card cache stops loading. Fresh-install tests cannot
+    show this; only the invalid-known-value case is covered elsewhere."""
+    api, c, home, calls = env
+    seed_chat(home, "s1", "Landing page copy")
+    state = home / "pickup"
+    state.mkdir()
+    (state / "settings.json").write_text(json.dumps({
+        "version": 1, "consent": {"given": True, "at": 1700000000.0},
+        "settings": {"max_chats": 8, "exclude_profiles": ["gone"], "exclude": ["health"], "retired_option": 7}}))
+    old_cards = [{"title": f"Old {i}", "summary": "You were working.", "stopped": "x", "next": None, "items": []}
+                 for i in range(3)]
+    (state / "cache.json").write_text(json.dumps({"version": 1, "made_at": 1700000100.0, "cards": old_cards,
+                                                  "counts": {"chats": 3, "projects": 0, "files": 0}}))
+
+    status = c.get(f"{PREFIX}/status").json()
+    assert status["consent"]["given"] is True and status["state_error"] is False
+    assert status["settings"]["exclude_profiles"] == ["gone"] and status["settings"]["max_chats"] == 8
+    assert (status["settings"]["max_cards"], status["settings"]["chats_per_profile"]) == (5, 3)
+    assert c.get(f"{PREFIX}/cards").json()["cards"] == old_cards
+
+    revived = home / "profiles" / "gone"  # the profile comes back: it must still be skipped
+    revived.mkdir(parents=True)
+    seed_chat(revived, "g1", "Revived profile chat")
+    assert c.post(f"{PREFIX}/refresh").status_code == 200
+    assert "Landing page copy" in calls[-1] and "Revived profile chat" not in calls[-1]
+
+
+def test_card_and_profile_settings_roundtrip_and_errors(env):
+    """Defect: the new limits save but are not returned/persisted, out-of-range or non-integer values are accepted
+    (a bool or 11 cards then breaks the prompt), a mistyped profile name is saved and silently skips nothing,
+    or a profile without a session store cannot be listed or skipped. Old tests cover the pre-0.2 fields only."""
+    api, c, home, calls = env
+    seed_chat(home, "s1", "Landing page copy")
+    (home / "profiles" / "fresh").mkdir(parents=True)  # a profile directory with no state.db yet
+    seed_chat_profile = home / "profiles" / "quiet"
+    seed_chat_profile.mkdir(parents=True)
+    seed_chat(seed_chat_profile, "q1", "Quiet profile chat")
+
+    listed = c.get(f"{PREFIX}/profiles").json()["profiles"]
+    assert listed == [{"name": "default", "has_session_store": True, "excluded": False},
+                      {"name": "fresh", "has_session_store": False, "excluded": False},
+                      {"name": "quiet", "has_session_store": True, "excluded": False}]
+
+    good = {"max_cards": 10, "chats_per_profile": 2, "max_chats": 40, "exclude_profiles": ["fresh"]}
+    assert c.put(f"{PREFIX}/settings", json=good).status_code == 200
+    saved = json.loads((home / "pickup" / "settings.json").read_text())["settings"]
+    assert {k: saved[k] for k in good} == good
+    status = c.get(f"{PREFIX}/status").json()
+    assert {k: status["settings"][k] for k in good} == good
+    assert set(status["available_profiles"]) == {"default", "fresh", "quiet"}
+    assert [p["excluded"] for p in c.get(f"{PREFIX}/profiles").json()["profiles"]] == [False, True, False]
+
+    for field, value in (("max_cards", 0), ("max_cards", 11), ("max_cards", True), ("max_cards", "5"), ("max_cards", 5.0),
+                         ("chats_per_profile", 11), ("max_chats", 41), ("exclude_profiles", ["frsh"])):
+        r = c.put(f"{PREFIX}/settings", json={field: value})
+        assert r.status_code == 422 and r.json()["detail"][0]["field"] == field, (field, value)
+    assert json.loads((home / "pickup" / "settings.json").read_text())["settings"] == saved  # rejects change nothing
+
+
 def test_concurrent_refresh_coalesces_and_recovers(env):
     """Defect: two refreshes (double click, two windows) each make a paid model call over the same private
     data, or a failed run leaves the "running" flag stuck so Refresh never works again.
